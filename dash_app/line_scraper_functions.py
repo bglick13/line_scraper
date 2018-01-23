@@ -93,12 +93,14 @@ def extract_games_from_df(df, league):
             games = games.append(game, ignore_index=True)
             successes += 1
         except ConnectionError:
-            print('Failed on the following game')
-            print(row)
+            # print('Failed on the following game')
+            # print(row)
             failures += 1
         except ValueError:
-            print('Failed on the following game')
-            print(row)
+            # print('Failed on the following game')
+            # print(row)
+            failures += 1
+        except requests.exceptions.ConnectionError:
             failures += 1
         if i % 10 == 0:
             print("Succeeded on {} of {} games so far".format(successes, successes+failures))
@@ -108,7 +110,7 @@ def extract_games_from_df(df, league):
 
 def extract_tables_from_game(home_team, away_team, date, game_uuid, league):
     url = 'http://www.vegasinsider.com/{}/odds/offshore/line-movement/{}-@-{}.cfm/date/{}'.format(league, away_team, home_team, date)
-#     print(url)
+    print(url)
     page = requests.get(url).text
     soup = BeautifulSoup(page)
     try:
@@ -217,6 +219,7 @@ def calc_concensus(lines):
     lines['concensus_ml_dog'] = np.nan
     lines['ml_dog_std'] = np.nan
     lines['ml_fav_std'] = np.nan
+    lines['n_lines_available'] = np.nan
 
     for key, grp in lines.groupby('game_uuid'):
         grp = grp[grp.line_datetime < grp.game_datetime]
@@ -226,6 +229,7 @@ def calc_concensus(lines):
             lines.loc[label, 'concensus_ml_dog'] = _grp['ml_dog_prob'].mean()
             lines.loc[label, 'ml_dog_std'] = _grp['ml_dog_prob'].std()
             lines.loc[label, 'ml_fav_std'] = _grp['ml_fav_prob'].std()
+            lines.loc[label, 'n_lines_available'] = idx + 1
     lines = lines.dropna()
     lines['ml_fav_z'] = (lines['ml_fav_prob'] - lines['concensus_ml_fav']) / lines['ml_fav_std']
     lines['ml_dog_z'] = (lines['ml_dog_prob'] - lines['concensus_ml_dog']) / lines['ml_dog_std']
