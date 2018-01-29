@@ -20,7 +20,7 @@ def simulate_games(concensus_lines, games, team_mapping, min_lines, tol=.05, ban
     bankroll_over_time = [bankroll]
     for key, grp in concensus_lines.groupby('game_uuid'):
         grp = grp[grp.n_lines_available >= min_lines]
-        bet_size = bankroll * risk
+        bet_size = min(bankroll * risk, 1000)
         # bet_size=100.
         if use_z:
             line_taken = grp.loc[(grp.ml_fav_z <= tol) | (grp.ml_dog_z <= tol)]
@@ -68,9 +68,9 @@ if __name__ == '__main__':
     # pd.to_pickle(lines, 'new_nba_c_lines.pkl')
 
     # z_tols = [-3.5, -3, -2.5, -2, -.5]
-    z_tols = [-3.]
-    p_tols = [.05]
-    min_lines = [1, 5, 7, 10, 12]
+    z_tols = []
+    p_tols = [.0255, .026, .0275]
+    min_lines = [12]
 
     for ml in min_lines:
         print("Sim with min lines = {}".format(ml))
@@ -112,6 +112,7 @@ if __name__ == '__main__':
             print("Percent of games bet: {}".format(percent_bet))
             print("Average Return: {}".format(avg_return))
             print('Accuracy: {}'.format(accuracy))
+            print('Average implied Prob: {}'.format(np.mean(probs)))
             print("Probability of Profitability: {}".format(prob_of_profit))
 
         print('\n')

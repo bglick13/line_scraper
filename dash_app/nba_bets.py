@@ -8,10 +8,13 @@ from dash.dependencies import Output, Input
 from twilio.rest import Client
 import requests
 import pandas as pd
+import MySQLdb
+# from dash_app.db_config import user, password
 from dash_app.line_scraper_functions import extract_games_from_df, process_lines, process_games
-
+from dash_app.selenium_test import SeleniumNBA
 from dash_app.nba_scraper import get_games
 
+# nba_spider = SeleniumNBA()
 account_sid = 'AC500cdffd41d5ae4f275e2eecc7c8677d'
 auth_token = '772f732acf5ff166e06e2b076c2f220b'
 client = Client(account_sid, auth_token)
@@ -21,6 +24,7 @@ team_to_id = dict(nba=dict(), nhl=dict(), ncaab=dict())
 id_to_book = {55: '5Dimes', 24: 'Bet365', 42: 'BetMania', 34: 'Bookmaker', 3: 'Pinnacle', 1: 'BetOnline',
               16: 'Heritage',
               8: 'MyBookie.ag', 21: 'Bovada', 4: 'Intertops', 9: 'Youwager', 28: 'SportsBetting',
+              13: 'Casears', 14: 'Westgate', 19: 'MGM Mirage', 32: 'Wynn',
               2: 'JustBet', 37: 'SportBet', 33: 'The Greek', 64: 'Nitrogen', 50: 'GTBets', 36: 'Jazz Sports',
               23: 'ABCislands', 52: 'LooseLines'}
 book_to_id = dict((b, i) for i, b in id_to_book.items())
@@ -30,8 +34,9 @@ white_list = set(['Bovada', 'BetMania', 'Bookmaker', 'SportBet', 'Nitrogen', 'Be
 
 
 Z_CUTOFF = -2.75
-P_CUTOFF = .0275
+P_CUTOFF = .026
 
+# con = MySQLdb.connect(host='127.0.0.1', user=user, password=password, db='betting')
 app = dash.Dash(__name__)
 server = app.server
 app.layout = html.Div(
@@ -95,8 +100,8 @@ def calc_concensus(lines):
 
 
 def gen_table(df):
-    cols = ['Game Date', 'Book', 'Line Time', 'Away', 'Away Ml', 'Away Z', 'Away Prob. Diff.',
-         'Home', 'Home Ml', 'Home Z', 'Home Prob. Diff.', 'Game ID']
+    cols = ['Game Date', 'Book', 'Line Time', 'Best Prob. Diff', 'Away', 'Away Ml', 'Away Prob. Diff.',
+         'Home', 'Home Ml', 'Home Prob. Diff.', 'Game ID']
     return html.Table(
         # Header
         [html.Tr([html.Th(col) for col in cols])] +
@@ -135,6 +140,91 @@ def prob_to_line(prob):
     else:
         return ((1 - prob) / prob) * 100
 
+
+def get_data_action_network(league):
+    url = 'https://api-prod.sprtactn.co/web/v1/scoreboard/{}?bookIds='.format(league)
+    for i in range(100):
+        if i != 45:
+            url = url + str(i) + ','
+    url = url[:-1]
+    r = requests.get(url)
+    json = r.json()
+    games = json['games']
+    df = dict(home_ml=[], away_ml=[], book_id=[], line_dt=[], home_id=[], away_id=[], game_id=[], game_date=[])
+    for game in games:
+        teams = game['teams']
+        for team in teams:
+            id_to_team[league][team['id']] = team['display_name']
+            team_to_id[league][team['display_name']] = team['id']
+
+        home_team = id_to_team[league][game['home_team_id']]
+        away_team = id_to_team[league][game['away_team_id']]
+        try:
+            odds = game['odds']
+        except KeyError:
+            continue
+        for odd in odds:
+            if odd['type'] == 'game':
+                df['home_ml'].append(odd['ml_home'])
+                df['away_ml'].append(odd['ml_away'])
+                df['book_id'].append(odd['book_id'])
+                df['line_dt'].append(odd['inserted'])
+                df['home_id'].append(game['home_team_id'])
+                df['away_id'].append(game['away_team_id'])
+                df['game_id'].append(game['id'])
+                df['game_date'].append(game['start_time'])
+
+    df = pd.DataFrame(df)
+    df = df.dropna()
+    df = df[df['book_id'].isin(id_to_book.keys())]
+    # Process lines. Convert American odds to probabilities
+    df['home_ml_prob'] = df['home_ml'].apply(lambda x: line_to_prob(x))
+    df['away_ml_prob'] = df['away_ml'].apply(lambda x: line_to_prob(x))
+    df['home_team'] = df['home_id'].apply(lambda x: id_to_team[league][x])
+    df['away_team'] = df['away_id'].apply(lambda x: id_to_team[league][x])
+    df['home_ml_consensus'] = np.nan
+    df['away_ml_consensus'] = np.nan
+    df['home_ml_std'] = np.nan
+    df['away_ml_std'] = np.nan
+    df['line_dt'] = pd.to_datetime(df['line_dt'])
+    df['game_date'] = pd.to_datetime(df['game_date']) - datetime.timedelta(seconds=5 * 60 * 60)
+    df['Pretty_Line_Time'] = df['line_dt'].apply(
+        lambda x: (x - datetime.timedelta(seconds=5 * 60 * 60)).strftime('%d-%m-%y %I:%M %p'))
+    df['Pretty_Game_Time'] = df['game_date'].apply(lambda x: x.strftime('%d-%m-%y %I:%M %p'))
+    df = df[df['game_date'] >= datetime.datetime.now()]
+    df['book'] = df['book_id'].apply(lambda x: id_to_book[x])
+
+    # Calc consensus
+    df = df.sort_values('line_dt')
+    for key, grp in df.groupby('game_id'):
+        grp = grp.drop_duplicates('book_id', keep='last')
+        df.loc[grp.index, 'home_ml_consensus'] = grp['home_ml_prob'].mean()
+        df.loc[grp.index, 'away_ml_consensus'] = grp['away_ml_prob'].mean()
+
+        df.loc[grp.index, 'home_ml_std'] = grp['home_ml_prob'].std()
+        df.loc[grp.index, 'away_ml_std'] = grp['away_ml_prob'].std()
+
+    df = df.dropna()
+
+    # df['home_ml_prob'] = df['home_ml_prob']
+    # df['away_ml_prob'] = df['away_ml_prob']
+    #
+    # df['home_ml_consensus'] = df['home_ml_consensus']
+    # df['away_ml_consensus'] = df['away_ml_consensus']
+    #
+    # df['home_ml_std'] = df['home_ml_std']
+    # df['away_ml_std'] = df['away_ml_std']
+
+    df['home_ml_z'] = ((df['home_ml_prob'] - df['home_ml_consensus']) / df['home_ml_std']).round(4)
+    df['away_ml_z'] = ((df['away_ml_prob'] - df['away_ml_consensus']) / df['away_ml_std']).round(4)
+
+    df['home_p_diff'] = (df['home_ml_prob'] - df['home_ml_consensus']).round(4)
+    df['away_p_diff'] = (df['away_ml_prob'] - df['away_ml_consensus']).round(4)
+
+    df['best_p_diff'] = df[['home_p_diff', 'away_p_diff']].min(axis=1)
+    df = df.sort_values('best_p_diff')
+    return df
+
 @app.callback(Output('live-update-table', 'children'),
               [Input('interval-component', 'n_intervals')])
 def update_table_v2(n_intervals):
@@ -142,103 +232,90 @@ def update_table_v2(n_intervals):
     leagues = ['nba', 'nhl', 'ncaab']
     for league in leagues:
         divs.append(html.H1(league))
-        url = 'https://api-prod.sprtactn.co/web/v1/scoreboard/{}?bookIds='.format(league)
-        for i in range(100):
-            if i != 45:
-                url = url + str(i) + ','
-        url = url[:-1]
-        r = requests.get(url)
-        json = r.json()
-        games = json['games']
-        df = dict(home_ml=[], away_ml=[], book_id=[], line_dt=[], home_id=[], away_id=[], game_id=[], game_date=[])
-        for game in games:
-            teams = game['teams']
-            for team in teams:
-                id_to_team[league][team['id']] = team['display_name']
-                team_to_id[league][team['display_name']] = team['id']
-
-            home_team = id_to_team[league][game['home_team_id']]
-            away_team = id_to_team[league][game['away_team_id']]
-            try:
-                odds = game['odds']
-            except KeyError:
-                continue
-            for odd in odds:
-                if odd['type'] == 'game':
-                    df['home_ml'].append(odd['ml_home'])
-                    df['away_ml'].append(odd['ml_away'])
-                    df['book_id'].append(odd['book_id'])
-                    df['line_dt'].append(odd['inserted'])
-                    df['home_id'].append(game['home_team_id'])
-                    df['away_id'].append(game['away_team_id'])
-                    df['game_id'].append(game['id'])
-                    df['game_date'].append(game['start_time'])
-
-        df = pd.DataFrame(df)
-        df = df.dropna()
-        df = df[df['book_id'].isin(id_to_book.keys())]
-        # Process lines. Convert American odds to probabilities
-        df['home_ml_prob'] = df['home_ml'].apply(lambda x: line_to_prob(x))
-        df['away_ml_prob'] = df['away_ml'].apply(lambda x: line_to_prob(x))
-        df['home_team'] = df['home_id'].apply(lambda x: id_to_team[league][x])
-        df['away_team'] = df['away_id'].apply(lambda x: id_to_team[league][x])
-        df['home_ml_consensus'] = np.nan
-        df['away_ml_consensus'] = np.nan
-        df['home_ml_std'] = np.nan
-        df['away_ml_std'] = np.nan
-        df['line_dt'] = pd.to_datetime(df['line_dt'])
-        df['game_date'] = pd.to_datetime(df['game_date'])
-        df['Pretty_Line_Time'] = df['line_dt'].apply(lambda x: (x-datetime.timedelta(seconds=5*60*60)).strftime('%d-%m-%y %I:%M %p'))
-        df['Pretty_Game_Time'] = df['game_date'].apply(lambda x: x.strftime('%d-%m-%y'))
-        df['book'] = df['book_id'].apply(lambda x: id_to_book[x])
-
-        # Calc consensus
-        df = df.sort_values('line_dt')
-        for key, grp in df.groupby('game_id'):
-            grp = grp.drop_duplicates('book_id', keep='last')
-            df.loc[grp.index, 'home_ml_consensus'] = grp['home_ml_prob'].mean()
-            df.loc[grp.index, 'away_ml_consensus'] = grp['away_ml_prob'].mean()
-
-            df.loc[grp.index, 'home_ml_std'] = grp['home_ml_prob'].std()
-            df.loc[grp.index, 'away_ml_std'] = grp['away_ml_prob'].std()
-
-        df = df.dropna()
-
-        df['home_ml_prob'] = df['home_ml_prob']
-        df['away_ml_prob'] = df['away_ml_prob']
-
-        df['home_ml_consensus'] = df['home_ml_consensus']
-        df['away_ml_consensus'] = df['away_ml_consensus']
-
-        df['home_ml_std'] = df['home_ml_std']
-        df['away_ml_std'] = df['away_ml_std']
-
-        df['home_ml_z'] = ((df['home_ml_prob'] - df['home_ml_consensus']) / df['home_ml_std']).round(4)
-        df['away_ml_z'] = ((df['away_ml_prob'] - df['away_ml_consensus']) / df['away_ml_std']).round(4)
-
-        df['home_p_diff'] = (df['home_ml_prob'] - df['home_ml_consensus']).round(4)
-        df['away_p_diff'] = (df['away_ml_prob'] - df['away_ml_consensus']).round(4)
-
+        # url = 'https://api-prod.sprtactn.co/web/v1/scoreboard/{}?bookIds='.format(league)
+        # for i in range(100):
+        #     if i != 45:
+        #         url = url + str(i) + ','
+        # url = url[:-1]
+        # r = requests.get(url)
+        # json = r.json()
+        # games = json['games']
+        # df = dict(home_ml=[], away_ml=[], book_id=[], line_dt=[], home_id=[], away_id=[], game_id=[], game_date=[])
+        # for game in games:
+        #     teams = game['teams']
+        #     for team in teams:
+        #         id_to_team[league][team['id']] = team['display_name']
+        #         team_to_id[league][team['display_name']] = team['id']
+        #
+        #     home_team = id_to_team[league][game['home_team_id']]
+        #     away_team = id_to_team[league][game['away_team_id']]
+        #     try:
+        #         odds = game['odds']
+        #     except KeyError:
+        #         continue
+        #     for odd in odds:
+        #         if odd['type'] == 'game':
+        #             df['home_ml'].append(odd['ml_home'])
+        #             df['away_ml'].append(odd['ml_away'])
+        #             df['book_id'].append(odd['book_id'])
+        #             df['line_dt'].append(odd['inserted'])
+        #             df['home_id'].append(game['home_team_id'])
+        #             df['away_id'].append(game['away_team_id'])
+        #             df['game_id'].append(game['id'])
+        #             df['game_date'].append(game['start_time'])
+        #
+        # df = pd.DataFrame(df)
+        # df = df.dropna()
+        # df = df[df['book_id'].isin(id_to_book.keys())]
+        # # Process lines. Convert American odds to probabilities
+        # df['home_ml_prob'] = df['home_ml'].apply(lambda x: line_to_prob(x))
+        # df['away_ml_prob'] = df['away_ml'].apply(lambda x: line_to_prob(x))
+        # df['home_team'] = df['home_id'].apply(lambda x: id_to_team[league][x])
+        # df['away_team'] = df['away_id'].apply(lambda x: id_to_team[league][x])
+        # df['home_ml_consensus'] = np.nan
+        # df['away_ml_consensus'] = np.nan
+        # df['home_ml_std'] = np.nan
+        # df['away_ml_std'] = np.nan
+        # df['line_dt'] = pd.to_datetime(df['line_dt'])
+        # df['game_date'] = pd.to_datetime(df['game_date'])-datetime.timedelta(seconds=5*60*60)
+        # df['Pretty_Line_Time'] = df['line_dt'].apply(lambda x: (x-datetime.timedelta(seconds=5*60*60)).strftime('%d-%m-%y %I:%M %p'))
+        # df['Pretty_Game_Time'] = df['game_date'].apply(lambda x: x.strftime('%d-%m-%y %I:%M %p'))
+        # df = df[df['game_date'] >= datetime.datetime.now()]
+        # df['book'] = df['book_id'].apply(lambda x: id_to_book[x])
+        #
+        # # Calc consensus
+        # df = df.sort_values('line_dt')
+        # for key, grp in df.groupby('game_id'):
+        #     grp = grp.drop_duplicates('book_id', keep='last')
+        #     df.loc[grp.index, 'home_ml_consensus'] = grp['home_ml_prob'].mean()
+        #     df.loc[grp.index, 'away_ml_consensus'] = grp['away_ml_prob'].mean()
+        #
+        #     df.loc[grp.index, 'home_ml_std'] = grp['home_ml_prob'].std()
+        #     df.loc[grp.index, 'away_ml_std'] = grp['away_ml_prob'].std()
+        df = get_data_action_network(league)
+        # df = nba_spider.parse(league)
+        if df is None:
+            continue
         # Check for betting opportunities
         for key, grp in df.groupby('game_id'):
-            home_z_cutoff = Z_CUTOFF * grp.home_ml_prob.std() + grp.home_ml_prob.mean()# (-2.75 * std) + mean = x
-            away_z_cutoff = Z_CUTOFF * grp.away_ml_prob.std() + grp.away_ml_prob.mean()# (-2.75 * std) + mean = x
+            home_z_cutoff = grp.home_ml_consensus.values[0] - P_CUTOFF # Z_CUTOFF * grp.home_ml_prob.std() + grp.home_ml_prob.mean()# (-2.75 * std) + mean = x
+            away_z_cutoff = grp.away_ml_consensus.values[0] - P_CUTOFF # Z_CUTOFF * grp.away_ml_prob.std() + grp.away_ml_prob.mean()# (-2.75 * std) + mean = x
             target_home_line = np.round(prob_to_line(home_z_cutoff), 0)
             target_away_line = np.round(prob_to_line(away_z_cutoff), 0)
             home_team = grp.home_team.values[0]
             away_team = grp.away_team.values[0]
-            z_grp = grp.loc[(grp.home_ml_z <= Z_CUTOFF) | (grp.away_ml_z <= Z_CUTOFF), :]
+            # z_grp = grp.loc[(grp.home_ml_z <= Z_CUTOFF) | (grp.away_ml_z <= Z_CUTOFF), :]
             p_grp = grp.loc[(grp.home_ml_prob <= (grp.home_ml_consensus - P_CUTOFF)) |
                             (grp.away_ml_prob <= (grp.away_ml_consensus - P_CUTOFF)), :]
 
-            if len(z_grp) > 0 and len(grp) >= 10:
-                for i in range(len(z_grp)):
-                    row = z_grp.iloc[i, :]
-                    if not gen_text(row, True) in messages_sent and row.book in white_list:
-                        message = client.messages.create(to='+16179356853',
-                                                         from_='+17814606736',
-                                                         body=gen_text(row, True))
-                        messages_sent.add(gen_text(row, True))
+            # if len(z_grp) > 0 and len(grp) >= 10:
+            #     for i in range(len(z_grp)):
+            #         row = z_grp.iloc[i, :]
+            #         if not gen_text(row, True) in messages_sent and row.book in white_list:
+            #             message = client.messages.create(to='+16179356853',
+            #                                              from_='+17814606736',
+            #                                              body=gen_text(row, True))
+            #             messages_sent.add(gen_text(row, True))
             if len(p_grp) > 0:
                 for i in range(len(p_grp)):
                     row = p_grp.iloc[i, :]
@@ -247,9 +324,9 @@ def update_table_v2(n_intervals):
                                                          from_='+17814606736',
                                                          body=gen_text(row, False))
                         messages_sent.add(gen_text(row, False))
-            c = ['Pretty_Game_Time', 'book', 'Pretty_Line_Time',
-                 'away_team', 'away_ml', 'away_ml_z', 'away_p_diff',
-                 'home_team', 'home_ml', 'home_ml_z', 'home_p_diff', 'game_id']
+            c = ['Pretty_Game_Time', 'book', 'Pretty_Line_Time', 'best_p_diff',
+                 'away_team', 'away_ml', 'away_p_diff',
+                 'home_team', 'home_ml', 'home_p_diff']
             div = html.Div([
                 html.H2('{} (Target Line = {}) @ {} (Target Line = {})'.format(away_team,
                                                                                target_away_line,
@@ -257,8 +334,8 @@ def update_table_v2(n_intervals):
                                                                                target_home_line)),
                 html.H4('All Current Lines'),
                 gen_table(grp.loc[:, c]),
-                html.H4('Lines {} z-scores off'.format(-1 * Z_CUTOFF)),
-                gen_table(grp.loc[(grp.home_ml_z <= Z_CUTOFF) | (grp.away_ml_z <= Z_CUTOFF), c]),
+                # html.H4('Lines {} z-scores off'.format(-1 * Z_CUTOFF)),
+                # gen_table(grp.loc[(grp.home_ml_z <= Z_CUTOFF) | (grp.away_ml_z <= Z_CUTOFF), c]),
                 html.H4('Lines {}% probability off'.format(P_CUTOFF * 100)),
                 gen_table(grp.loc[(grp.home_ml_prob <= (grp.home_ml_consensus - P_CUTOFF)) |
                                   (grp.away_ml_prob <= (grp.away_ml_consensus - P_CUTOFF)), c])
