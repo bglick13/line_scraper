@@ -117,7 +117,7 @@ class SeleniumSpider:
     # Close chromedriver
     def close_driver(self):
         print('closing driver...')
-        # self.display.stop()
+        self.display.stop()
         self.driver.quit()
         print('closed!')
 
@@ -136,9 +136,9 @@ class SeleniumSpider:
         self.sport_tabs = self.driver.find_element_by_id('sport-tabs-list').find_elements_by_class_name('btn-sport')
 
     def select_sport(self, sport):
-        print("selecting {} tab".format(sport))
+        # print("selecting {} tab".format(sport))
         if sport.lower() == 'nba':
-            print(self.sport_tabs[1].text)
+            # print(self.sport_tabs[1].text)
             self.sport_tabs[1].click()
         if sport.lower() == 'mlb':
             self.sport_tabs[2].click()
@@ -152,7 +152,7 @@ class SeleniumSpider:
             self.sport_tabs[8].click()
 
     def select_moneylines(self):
-        print("selecting moneylines")
+        # print("selecting moneylines")
         self.select = Select(self.driver.find_element_by_id('view-options').find_element_by_class_name('smart-form'))
         self.select.select_by_visible_text('Moneyline')
 

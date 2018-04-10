@@ -3,6 +3,29 @@ import numpy as np
 import pandas as pd
 import datetime
 
+bookies = ['5Dimes',
+ 'Bet365',
+ 'BetDSI',
+ 'BetMania',
+ 'BetOnline',
+ 'Bookmaker',
+ 'Bovada',
+ 'Caesars',
+ 'Consensus',
+ 'GTBets',
+ 'Greek',
+ 'Heritage',
+ 'Intertops',
+ 'JustBet',
+ 'LooseLines',
+ # 'MGM',
+ 'Nitrogen',
+ 'Pinnacle',
+ 'Sportbet',
+ 'SportsBetting',
+ 'Sportsbk',
+ 'Westgate',
+ 'YouWager']
 
 def get_data():
     db = MySQLdb.connect(host="127.0.0.1", port=3306, user="root", passwd="", db="betting")
@@ -13,7 +36,7 @@ def get_data():
                          data=np.array(games))
     output = pd.DataFrame(columns=['bookie', 'home_prob', 'away_prob', 'line_datetime', 'game_id'])
     for game_id, game_dt, outcome in games.loc[:, ['game_id', 'game_datetime', 'outcome']].values:
-        q = """select * from betting.lines where game_id_fk = %s""" % (game_id,)
+        q = """select * from betting.lines where game_id_fk = %s and bookie != 'MGM' order by line_datetime""" % (game_id,)
         c.execute(q)
         lines = c.fetchall()
         lines = pd.DataFrame(columns=['bookie', 'home_prob', 'away_prob', 'line_datetime', 'game_id'],
@@ -29,6 +52,32 @@ def get_data():
     return output
 
 
+def get_live_input(game_id, sequence_length=10):
+    db = MySQLdb.connect(host="127.0.0.1", port=3306, user="root", passwd="", db="betting")
+    c = db.cursor()
+    q = """select * from betting.lines where game_id_fk = %s and bookie != 'MGM' order by line_datetime""" % (game_id, )
+    c.execute(q)
+    lines = list(c.fetchall())
+    # q = """select * from betting.lines where game_id_fk = %s order by line_datetime limit 1""" % (game_id, )
+    # c.execute(q)
+    # _open = c.fetchone()
+    # lines.append(_open)
+    lines = pd.DataFrame(columns=['bookie', 'home_prob', 'away_prob', 'line_datetime', 'game_id'],
+                         data=np.array(lines)).sort_values('line_datetime')
+    lines['home_prob'] = pd.to_numeric(lines['home_prob'])
+    lines['away_prob'] = pd.to_numeric(lines['away_prob'])
+    pivot = pd.pivot_table(lines, 'home_prob', 'line_datetime', 'bookie')
+    pivot = pivot.fillna(method='ffill').dropna().values
+    # pivot = pivot.apply(lambda row: row.fillna(row.mean()), axis=1).values
+    pivot = np.vstack((pivot[0], pivot[-sequence_length:]))
+    away_pivot = pd.pivot_table(lines, 'away_prob', 'line_datetime', 'bookie')
+    away_pivot = away_pivot.fillna(method='ffill').dropna().values
+    # away_pivot = away_pivot.apply(lambda row: row.fillna(row.mean()), axis=1).values
+    away_pivot = np.vstack((away_pivot[0], away_pivot[-sequence_length:]))
+
+    db.close()
+    return np.array([pivot]), np.array([away_pivot])
+
 def build_flat_dataset(data=None):
     if data is None:
         data = get_data()
@@ -37,7 +86,7 @@ def build_flat_dataset(data=None):
     for key, grp in data.groupby('game_id'):
         pivot = pd.pivot_table(grp, 'home_prob', 'line_datetime', 'bookie')
         pivot = pivot.fillna(method='ffill').dropna()
-        if len(pivot.columns) != 23:
+        if len(pivot.columns) != len(bookies):
             continue
         if X is None:
             X = pivot
@@ -48,19 +97,24 @@ def build_flat_dataset(data=None):
     return X, y
 
 
-def build_sequence_dataset(data=None, sequence_length=10, window=2):
+def build_sequence_dataset(data=None, sequence_length=10, window=2, home=True):
+    if home:
+        odds = 'home_prob'
+    else:
+        odds = 'away_prob'
     if data is None:
         data = get_data()
     X = []
     y = []
     games = []
     for key, grp in data.groupby('game_id'):
-        pivot = pd.pivot_table(grp, 'home_prob', 'line_datetime', 'bookie')
-        pivot = pivot.fillna(method='ffill').dropna().values
+        pivot = pd.pivot_table(grp, odds, 'line_datetime', 'bookie')
+        pivot = pivot.fillna(method='ffill').dropna().values  # Fill N/A since some bookies (MGM) post lines very late
+        # pivot = pivot.apply(lambda row: row.fillna(row.mean()), axis=1).values
         outcome = grp['outcome'].values[0]
         for i in range(sequence_length, len(pivot), 1):
             _arr = np.vstack((pivot[0], pivot[i-sequence_length:i]))
-            if _arr.shape != (sequence_length+1, 23):
+            if _arr.shape != (sequence_length+1, len(bookies)):
                 continue
             X.append(_arr)
             y.append(outcome)
