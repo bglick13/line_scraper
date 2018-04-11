@@ -178,6 +178,52 @@ def run_gridsearch(**params):
     return results
 
 
+def generic_score(model, pred, home_X, away_X, y, games, tol=.025):
+    bankroll = 1000.
+    balance = [1000]
+    probs = []
+    games_bet = set([])
+    # pred = model.predict(home_X)
+    for p, home_x, away_x, y, g in zip(pred, home_X, away_X, y, games):
+        if g not in games_bet:
+            home_p_diffs = p - home_x[-1]
+            away_p_diffs = (1 - p) - away_x[-1]
+            if np.max(home_p_diffs) >= tol:
+                bookie = bookies[np.argmax(home_p_diffs)]
+                if bookie not in white_list:
+                    continue
+
+                odds = home_x[-1][np.argmax(home_p_diffs)]
+                ml = prob_to_ml(odds)
+                if y == 1:
+                    bankroll += calc_payout(50, ml)
+                else:
+                    bankroll -= 50
+
+                # print("Betting on home team in game {} at odds {}({}) - result: {}".format(g, odds, ml, y))
+                games_bet |= set([g])
+                balance.append(bankroll)
+                probs.append(odds)
+            elif np.max(away_p_diffs) >= tol:
+                bookie = bookies[np.argmax(away_p_diffs)]
+                if bookie not in white_list:
+                    continue
+
+                odds = away_x[-1][np.argmax(away_p_diffs)]
+                ml = prob_to_ml(odds)
+                if y == 0:
+                    bankroll += calc_payout(50, ml)
+                else:
+                    bankroll -= 50
+
+                # print("Betting on away team in game {} at odds {}({}) - result: {}".format(g, odds, ml, y))
+                games_bet |= set([g])
+                balance.append(bankroll)
+                probs.append(odds)
+    probs.append(probs)
+    return balance[-1]
+
+
 if __name__ == "__main__":
     params = {
         'tol': [.025, .03, .07],

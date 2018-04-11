@@ -1,26 +1,13 @@
-import datetime
 
-import dash
-import dash_core_components as dcc
-import dash_html_components as html
 import numpy as np
-from dash.dependencies import Output, Input
 from twilio.rest import Client
 import requests
-import pandas as pd
 import MySQLdb
-from MySQLdb.constants import FIELD_TYPE
 import datetime
-import time
 from tqdm import tqdm
-# from dash_app.db_config import user, password
-from dash_app.line_scraper_functions import extract_games_from_df, process_lines, process_games
 from dash_app.selenium_member_test import SeleniumSpider
-from dash_app.nba_scraper import get_games
 from bs4 import BeautifulSoup
-from multiprocessing import Process
-from dash_app.data_util import get_live_input
-from keras.models import load_model
+# from keras.models import load_model
 
 db = MySQLdb.connect(host="127.0.0.1", port=3306, user="root", passwd="", db="betting")
 account_sid = 'AC500cdffd41d5ae4f275e2eecc7c8677d'
@@ -311,54 +298,54 @@ def collect_lines(spider, model, tol=.05):
                 values = values.iloc[idx, :].values
                 if len(values) > 0:
                     insert_line(values)
-                    X, away_lines = get_live_input(game_id, 10)
-                    if X.shape == (1, 10 + 1, len(bookies)):
-                        prob = model.predict_proba(X)[0][0]
-                        home_p_diffs = prob - X[-1][-1]
-                        print("Home p diffs: {}".format(home_p_diffs))
-                        away_p_diffs = (1 - prob) - away_lines[-1][-1]
-                        print("Away p diffs: {}".format(away_p_diffs))
-
-                        team = None
-                        if np.max(home_p_diffs) > tol:
-                            idx = np.argmax(home_p_diffs)
-                            p = X[-1][-1][idx]
-                            true_p = prob - tol  # p + home_p_diffs[idx]
-                            bookie = bookies[idx]
-                            if bookie in white_list:
-                                team = home_team
-                        elif np.max(away_p_diffs) > tol:
-                            idx = np.argmax(away_p_diffs)
-                            p = away_lines[-1][-1][idx]
-                            true_p = (1 - prob) - tol  # p + away_p_diffs[idx]
-                            bookie = bookies[idx]
-                            if bookie in white_list:
-                                team = away_team
-                        if team is not None:
-                            ml = prob_to_ml(p)
-                            fair_ml = prob_to_ml(true_p)
-                            s = "Bet on {} ({} @ {}) at odds {} or better at {}".format(team, away_team, home_team,
-                                                                                        fair_ml, bookie)
-                            print(s)
-                            if game_id not in games_bet:
-                                try:
-                                    message = client.messages.create(to='+16179356853',
-                                                                     from_='+17814606736',
-                                                                     body=s)
-                                    games_bet.add(game_id)
-                                except:
-                                    pass
-                        else:
-                            best_home_prob = X[-1][-1][np.argmin(X[-1][-1])]
-                            best_away_prob = away_lines[-1][-1][np.argmin(away_lines[-1][-1])]
-                            print("Predicted true prob: {}, best home odds: {}, best away odds: {}".format(prob,
-                                                                                                           best_home_prob,
-                                                                                                           best_away_prob))
+                    # X, away_lines = get_live_input(game_id, 10)
+                    # if X.shape == (1, 10 + 1, len(bookies)):
+                    #     prob = model.predict_proba(X)[0][0]
+                    #     home_p_diffs = prob - X[-1][-1]
+                    #     print("Home p diffs: {}".format(home_p_diffs))
+                    #     away_p_diffs = (1 - prob) - away_lines[-1][-1]
+                    #     print("Away p diffs: {}".format(away_p_diffs))
+                    #
+                    #     team = None
+                    #     if np.max(home_p_diffs) > tol:
+                    #         idx = np.argmax(home_p_diffs)
+                    #         p = X[-1][-1][idx]
+                    #         true_p = prob - tol  # p + home_p_diffs[idx]
+                    #         bookie = bookies[idx]
+                    #         if bookie in white_list:
+                    #             team = home_team
+                    #     elif np.max(away_p_diffs) > tol:
+                    #         idx = np.argmax(away_p_diffs)
+                    #         p = away_lines[-1][-1][idx]
+                    #         true_p = (1 - prob) - tol  # p + away_p_diffs[idx]
+                    #         bookie = bookies[idx]
+                    #         if bookie in white_list:
+                    #             team = away_team
+                    #     if team is not None:
+                    #         ml = prob_to_ml(p)
+                    #         fair_ml = prob_to_ml(true_p)
+                    #         s = "Bet on {} ({} @ {}) at odds {} or better at {}".format(team, away_team, home_team,
+                    #                                                                     fair_ml, bookie)
+                    #         print(s)
+                    #         if game_id not in games_bet:
+                    #             try:
+                    #                 message = client.messages.create(to='+16179356853',
+                    #                                                  from_='+17814606736',
+                    #                                                  body=s)
+                    #                 games_bet.add(game_id)
+                    #             except:
+                    #                 pass
+                    #     else:
+                    #         best_home_prob = X[-1][-1][np.argmin(X[-1][-1])]
+                    #         best_away_prob = away_lines[-1][-1][np.argmin(away_lines[-1][-1])]
+                    #         print("Predicted true prob: {}, best home odds: {}, best away odds: {}".format(prob,
+                    #                                                                                        best_home_prob,
+                    #                                                                                        best_away_prob))
                             # print("Bet on {} ({} @ {}) at odds {} (implied: {})".format(team, away_team, home_team, ml, fair_ml))
-                    else:
-                        print("Invalid data for {} @ {}. Expected (1, {}, {}), got {}".format(away_team, home_team,
-                                                                                              10 + 1,
-                                                                                              len(bookies), X.shape))
+                    # else:
+                    #     print("Invalid data for {} @ {}. Expected (1, {}, {}), got {}".format(away_team, home_team,
+                    #                                                                           10 + 1,
+                    #                                                                           len(bookies), X.shape))
                     # p = Process(target=predict_live, args=(game_id, home_team, away_team))
                     # p.start()
                     # p.join()
@@ -369,7 +356,10 @@ def collect_lines(spider, model, tol=.05):
 
 if __name__ == '__main__':
     spider = SeleniumSpider()
-    model = load_model('trained_model.h5')
+    try:
+        model = load_model('trained_model.h5')
+    except:
+        model = None
     collect_lines(spider, model, .025)
     get_game_results()
     spider.close_driver()

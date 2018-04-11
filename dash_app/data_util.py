@@ -28,6 +28,10 @@ bookies = ['5Dimes',
  'YouWager']
 
 def get_data():
+    """
+
+    :return: DF of every line with an outcome
+    """
     db = MySQLdb.connect(host="127.0.0.1", port=3306, user="root", passwd="", db="betting")
     c = db.cursor()
     c.execute('select * from games where outcome is not null')
